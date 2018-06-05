@@ -34,7 +34,7 @@ class DynamicArray(object):
         self.num_phys_indices=num_phys_indices
         self.sps = sps
         self.L = L
-        self._arrs = []
+        self._arrs = [None]*L
         self.ndim = 4 if (num_phys_indices == 2) else 3
         
     def get_site(self,i):
@@ -76,23 +76,23 @@ class DynamicArray(object):
         self._check_local_dimensions()
     
     def _erase_arrs(self):
-        self._arrs = []
+        self._arrs = [None]*self.L
     
     def init_random(self, D):
         """initialize random values with bond dimension D"""
         self._erase_arrs()
         
         if self.num_phys_indices==2:
-            self._arrs.append(np.random.rand(self.sps, 1,D, self.sps))
-            for _ in range(self.L-2):
-                self._arrs.append(np.random.rand(self.sps, D,D, self.sps) / (D * np.sqrt(self.sps)) )
-            self._arrs.append(np.random.rand(self.sps, D,1, self.sps))
+            self._arrs[0] = (np.random.rand(self.sps, 1,D, self.sps))
+            for i in range(1,self.L-1):
+                self._arrs[i] = (np.random.rand(self.sps, D,D, self.sps) / (D * np.sqrt(self.sps)) )
+            self._arrs[self.L-1] = (np.random.rand(self.sps, D,1, self.sps))
             
         else:
-            self._arrs.append(np.random.rand(self.sps, 1,D))
-            for _ in range(self.L-2):
-                self._arrs.append(np.random.rand(self.sps, D,D) / (D * np.sqrt(self.sps)) )
-            self._arrs.append(np.random.rand(self.sps, D,1))
+            self._arrs[0] = (np.random.rand(self.sps, 1,D))
+            for i in range(1,self.L-1):
+                self._arrs[i] = (np.random.rand(self.sps, D,D) / (D * np.sqrt(self.sps)) )
+            self._arrs[self.L-1] = (np.random.rand(self.sps, D,1))
             
     
     def __repr__(self):
@@ -262,10 +262,115 @@ class MPS(object):
 
 
 class MPO(object):
-    """Stores a matrix product operator in dynamic array. """
+    """Stores a matrix product operator in dynamic array. 
+        
+        Stores left and right boundary indices, which define an interval in which the MPO acts nontrivially.
+        Outside of this interval, MPO acts as the identity.
+        The boundary indices are BOTH INCLUSIVE and match standard site-labeling conventions (0 to L-1).
+        For example il =1, ir = 1 defines a single-site MPO.
+        
+        Index convention (defined in DynamicArray):
+              physical, bond, bond, physical
+        
+        """
     
-    
+    def __init__(self, sps, il, ir):
+        self.sps = sps
+        self.set_left_boundary(il)
+        self.set_right_boundary(ir)        
+        
+    def set_left_boundary(self, i):
+        self._left_boundary = i
 
+    def set_right_boundary(self, i):
+        self._right_boundary = i
+        
+    @property
+    def ileft(self):
+        return self._left_boundary
+    
+    @property
+    def iright(self):
+        return self._right_boundary
+        
+    def _initialize_interval(self, dynamic_array):
+        """ Assigns matrix elements from dynamic array to the MPO.
+        Everything outside the interval is assumed to be the identity, so initial and final dimensions have to be 1"""
+        if dynamic_array.num_phys_indices!=2:
+            raise ValueError("Need two physical indices for MPO")
+        if dynamic_array.L != (self.iright - self.ileft + 1):
+            raise ValueError("Length of dynamic array does not agree with MPO boundaries")
+        if (dynamic_array.get_site(0).shape[1] !=1) or (dynamic_array.get_site(-1).shape[1]!=1):
+            raise ValueError("Expecting bond dimension 1 at the edges")
+        self._dynamic_array = dynamic_array
+        
+        
+        
+    def _get_identity_tensor(self):
+        """Tensor representing the identity operation on one site."""
+        return np.identity(self.sps).reshape((self.sps, 1, 1, self.sps))
+        
+    def get_site(self, i):
+        """ Returns local matrix for site i.
+            Note that the indexing is consistent with the left/right index boundaries, i.e.
+            if the MPO has support on [19,20] only indexing by those two values will give non-identity arrays."""
+        if i <self.ileft or i > self.iright:
+            return self._get_identity_tensor()
+        return self._dynamic_array.get_site(i - self.ileft)
+    
+    def _expt_value_local(self, MPS):
+        """ Returns the expectation value of this operator in a particular MPS.
+            DOES NOT CHECK FOR NORMALIZATION OF MPS
+            ASSUMES ALL INDICES OUTSIDE OF THIS MPO'S SUPPORT CONTRACT TO IDENTITY
+            -- hence, a 'local' expectation value. """
+        
+        left_edge = None
+        for i in range(self.ileft, self.iright+1):
+            A = MPS.get_site(i)
+            O = self.get_site(i)
+            #contract vertical indices
+            #this object has six bond indices 
+            new_link = np.tensordot(np.tensordot(np.conj(A), O, axes = ([0], [0])), A, axes = ([4], [0]))
+            if left_edge is None:
+                left_edge = new_link
+            else:
+                left_edge = np.tensordot(left_edge, new_link, axes =([1, 3, 5], [0, 2, 4]))
+                
+        # the thing that remains has 6 bond indices. Those of the MPO are trivial.
+        # those of the MPS will be traced out (this is the assumption of proper normalization)
+        return np.einsum('iijjkk', left_edge)
+
+    def __repr__(self):
+        r= "MPO on sites ({0}, {1})\n".format(self.ileft, self.iright)
+        r += self._dynamic_array.__repr__()
+        return r
+
+class MPOSingleSite(MPO):
+    """ MPO which has support on only one site."""
+    def __init__(self, sps, i):
+        MPO.__init__(self, sps, i, i)
+    
+def _make_tensor_single_site(O):
+    """O = a single-site operator written in standard basis"""
+    sps = O.shape[0]
+    if O.shape[1]!=sps:
+        raise ValueError("Local op must be square array")
+    return O.reshape((sps, 1, 1, sps))
+
+def _make_dynamic_array_single_site(O):
+    """ dynamic array containing only O"""
+    t = _make_tensor_single_site(O)
+    da=DynamicArray(t.shape[0], 1, num_phys_indices=2)
+    da.set_sites([0], [t])
+    return da
+    
+def MPO_from_local_matrix(O, i):
+    """Construct an MPO from matrix O (sps x sps) which acts only on a single site."""
+    sps = O.shape[0]
+    mpo = MPOSingleSite(sps, i)
+    arr = _make_dynamic_array_single_site(O)
+    mpo._initialize_interval(arr)
+    return mpo
 
 
 def _act_1qubit_gate(U, psi, i):
@@ -292,7 +397,7 @@ def _act_2qubit_local_gate(U, psi, i):
     A1, A2 = psi.get_site(i), psi.get_site(i+1)
     sps = A1.shape[0]
     D1, D2 = A1.shape[1], A2.shape[2]
-    AA= np.tensordot(A1, A2, axes ([2], [1])) ##sps, D1, sps, D2
+    AA= np.tensordot(A1, A2, axes=([2], [1])) ##sps, D1, sps, D2
     blob = np.tensordot(U, AA, axes =([2, 3], [0,2]))  # sps, sps, D1,D2
     blob = np.swapaxes(blob, 1, 2).reshape((sps*D1, sps*D2)) 
     u,s,v = np.linalg.svd(blob, full_matrices=False)
