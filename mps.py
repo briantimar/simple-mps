@@ -25,13 +25,17 @@ def gen_basis_strings(sps, L):
 
 
 class DynamicArray(object):
-    """Stores a sequence of arrays where the individual arrays can have any bond dimensions, but neighboring arrays have to agree with each other. """
+    """Stores a sequence of arrays where the individual arrays can have any bond dimensions, but neighboring arrays have to agree with each other.
+       Physical index is the zeroth axis of a particular array (there are L arrays, one per lattice site). The next two are bond (matrix) indices. 
+       If num_phys_indices=2 is specified, another physical index is added at the end."""
     
-    def __init__(self, sps, L):
+    def __init__(self, sps, L, num_phys_indices=1):
+        """num_phys_indices -- how many physical indices are attached to a particular node."""
+        self.num_phys_indices=num_phys_indices
         self.sps = sps
         self.L = L
         self._arrs = []
-        
+        self.ndim = 4 if (num_phys_indices == 2) else 3
         
     def get_site(self,i):
         return self._arrs[i]
@@ -40,16 +44,27 @@ class DynamicArray(object):
         A=self.get_site(i)
         return (A.shape[1], A.shape[2])
     
+    def _check_dims(self, i):
+        A = self.get_site(i)
+        if len(A.shape) != self.ndim:
+            raise ValueError("wrong number of axes")
+        if (A.shape[0] != self.sps):
+            raise ValueError("Local dimension does not match sps: {0}".format(A.shape))
+        if self.num_phys_indices==2:
+            if (A.shape[3] != self.sps):
+                raise ValueError("Local dimension does not match sps: {0}".format(A.shape))
+    
     def _check_local_dimensions(self):
         """ Assumes a list of 3-dimensional arrays. Enforces: constant first axis size, 
             and adjacent agreement for 2 and 3. """
+        for jj in range(self.L):
+            self._check_dims(jj)
+
         for ii in range(self.L-1):
             A, Anext = self.get_site(ii), self.get_site(ii+1)
-            if (A.shape[0] != self.sps) or (Anext.shape[0] !=self.sps):
-                raise ValueError("Local dimension is not constant: {0} {1}".format(A.shape, Anext.shape))
             if A.shape[2] != Anext.shape[1]:
                 raise ValueError("Bond dimensions at {0} do not agree".format(ii))
-            
+
     def _set_site(self, i, A):
         self._arrs[i] = A.copy()
                 
@@ -64,13 +79,21 @@ class DynamicArray(object):
         self._arrs = []
     
     def init_random(self, D):
-        """initialize random values with bond dimenion D"""
+        """initialize random values with bond dimension D"""
         self._erase_arrs()
-        self._arrs.append(np.random.rand(self.sps, 1,D))
-        for _ in range(self.L-2):
-            self._arrs.append(np.random.rand(self.sps, D,D) / (D * np.sqrt(self.sps)) )
-        self._arrs.append(np.random.rand(self.sps, D,1))
         
+        if self.num_phys_indices==2:
+            self._arrs.append(np.random.rand(self.sps, 1,D, self.sps))
+            for _ in range(self.L-2):
+                self._arrs.append(np.random.rand(self.sps, D,D, self.sps) / (D * np.sqrt(self.sps)) )
+            self._arrs.append(np.random.rand(self.sps, D,1, self.sps))
+            
+        else:
+            self._arrs.append(np.random.rand(self.sps, 1,D))
+            for _ in range(self.L-2):
+                self._arrs.append(np.random.rand(self.sps, D,D) / (D * np.sqrt(self.sps)) )
+            self._arrs.append(np.random.rand(self.sps, D,1))
+            
     
     def __repr__(self):
         if len(self._arrs)!=self.L or self.L >10:
@@ -197,27 +220,20 @@ class MPS(object):
         """ roll all SV's into the first site"""
         for i in range(1,self.L):
             self.svd_push_left(self.L - i)
-        
-    def _normalize_end(self, i):
-        if i not in [0, self.L-1]:
-            raise ValueError
-        wts = self.get_left_weight_matrix(i) if( i==self.L-1 ) else self.get_right_weight_matrix(i)
-        nm = np.trace(wts)
+            
+    def _normalize_site(self, i):
+        """ rescales site matrix to have total trace 1 -- such that, if all other sites are appropriately left/right normalized, the state will have norm 1."""
         A = self.get_site(i)
-        self.set_site(i, A/ np.sqrt(nm))
+        nm = np.tensordot(A, np.conj(A), axes = ([0, 1, 2], [0, 1, 2]))
+        self.set_site(i,A / np.sqrt(nm))
         
     def _normalize_right_end(self):
         """Rescales the final (righmost) site matrices so that they satisfy a left-normalization condition"""
-#        i=self.L-1
-#        AAdag = self.get_left_weight_matrix(i)
-#        nm = np.trace(AAdag)
-#        A = self.get_site(i)
-#        self.set_site(i, A / np.sqrt(nm) )
-#        
-        self._normalize_end(self.L-1)
+      
+        self._normalize_site(self.L-1)
     
     def _normalize_left_end(self):
-        self._normalize_end(0)        
+        self._normalize_site(0)        
         
     def left_normalize_full(self):
         """Rolls right (i.e. left-normalizes all but the last site matrix), then rescales that one so as to give the whole state norm 1."""
@@ -245,6 +261,10 @@ class MPS(object):
 
 
 
+class MPO(object):
+    """Stores a matrix product operator in dynamic array. """
+    
+    
 
 
 
