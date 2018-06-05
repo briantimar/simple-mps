@@ -120,11 +120,16 @@ class MPS(object):
             M= np.tensordot(M, A_Adag, axes=([2,3], [0,2]))
         return np.einsum('ijij', M)
     
-    def get_local_weight_matrix(self, i):
+    def get_left_weight_matrix(self, i):
         """ returns the matrix sum_sigma A^dag A, A being the site matrix. If the state is left-normalized, this should be the identity."""
         A = self.get_site(i)
         return np.tensordot(A, np.conj(A), axes=([0, 1], [0, 1]))
             
+    def get_right_weight_matrix(self, i):
+        B = self.get_site(i)
+        return np.tensordot(B, np.conj(B), axes=([0, 2], [0,2]))
+    
+    
     def _get_coeff(self, basis_state):
         """ entries of basis state = 0, ..., sps-1"""
         if len(basis_state)!=self.L:
@@ -167,23 +172,70 @@ class MPS(object):
 
         self.set_sites([i, i+1], [Anew, A_right_new]) 
         
+        
+    def svd_push_left(self, i):
+        """ Perform SVD on the site matrix i, push the SV's to the left; site i will end up right-normalized."""
+        if i==0:
+            raise ValueError("Can't push to left at left edge site")
+        B = self.get_site(i)
+        sps, D1, D2 = B.shape
+        B = np.reshape(np.swapaxes(B, 0,1), (D1, sps * D2))
+        u,s,v = np.linalg.svd(B, full_matrices=False)
+        k=s.shape[0]
+        Anew = np.swapaxes(v.reshape( (k, sps, D2)), 0, 1)
+        Aleft_new = np.tensordot(self.get_site(i-1), np.dot(u, np.diag(s)), axes=([2], [0]))
+        
+        self.set_sites([i-1, i], [Aleft_new, Anew])
+        
+        
     def roll_right(self):
         """ Roll all SV's into the last site"""
         for i in range(self.L-1):
             self.svd_push_right(i)
             
+    def roll_left(self):
+        """ roll all SV's into the first site"""
+        for i in range(1,self.L):
+            self.svd_push_left(self.L - i)
+        
+    def _normalize_end(self, i):
+        if i not in [0, self.L-1]:
+            raise ValueError
+        wts = self.get_left_weight_matrix(i) if( i==self.L-1 ) else self.get_right_weight_matrix(i)
+        nm = np.trace(wts)
+        A = self.get_site(i)
+        self.set_site(i, A/ np.sqrt(nm))
+        
     def _normalize_right_end(self):
         """Rescales the final (righmost) site matrices so that they satisfy a left-normalization condition"""
-        i=self.L-1
-        AAdag = self.get_local_weight_matrix(i)
-        nm = np.trace(AAdag)
-        A = self.get_site(i)
-        self.set_site(i, A / np.sqrt(nm) )
+#        i=self.L-1
+#        AAdag = self.get_left_weight_matrix(i)
+#        nm = np.trace(AAdag)
+#        A = self.get_site(i)
+#        self.set_site(i, A / np.sqrt(nm) )
+#        
+        self._normalize_end(self.L-1)
+    
+    def _normalize_left_end(self):
+        self._normalize_end(0)        
         
     def left_normalize_full(self):
-        """Rolls right (i.e. left-normalizes all but the last site matrix, then rescales that one so as to give the whole state norm 1."""
+        """Rolls right (i.e. left-normalizes all but the last site matrix), then rescales that one so as to give the whole state norm 1."""
         self.roll_right()
         self._normalize_right_end()
+    
+    def right_normalize_full(self):
+        self.roll_left()
+        self._normalize_left_end()
+
+    def gauge(self, i):
+        """Left-normalize all matrices to the left of site i, and right-normalize all those to the right.
+        This is a prerequisite for easy MPO evaluation on site i.
+        """
+        for il in range(i):
+            self.svd_push_right(il)
+        for ir in range(i+1, self.L):
+            self.svd_push_left(ir)
     
     def get_bond_shape(self, i):
         return self._dynamic_array.get_bond_shape(i)
@@ -191,11 +243,45 @@ class MPS(object):
     def __repr__(self):
         return "MPS. Internal array: \n" + self._dynamic_array.__repr__()
 
-   
 
 
-def act_1local_gate(U, psi):
-    """Apply a single-qubit gate to MPS psi""" 
+
+
+
+def _act_1qubit_gate(U, psi, i):
+    """Apply a single-qubit gate to MPS psi at site i.
+       U = (sps) x (sps) array. For now assumed to be unitary.
+       psi = (pure ) MPS state.
+       
+       Updates the state in-place.
+       """
+       
+    A = psi.get_site(i)
+    psi.set_site(i, np.tensordot(U, A), axes=([1], [0]))
+    
+  
+    
+def _act_2qubit_local_gate(U, psi, i):
+    """ Apply two-qubit gate to sites i, i+1 of MPS psi.
+        U = 4-index gate, each axis of dimension sps.
+        psi = MPS
+        
+        Updates the state in-place.
+        Note that after applying the gate, left-normalization if any is generally not preserved."""
+    
+    A1, A2 = psi.get_site(i), psi.get_site(i+1)
+    sps = A1.shape[0]
+    D1, D2 = A1.shape[1], A2.shape[2]
+    AA= np.tensordot(A1, A2, axes ([2], [1])) ##sps, D1, sps, D2
+    blob = np.tensordot(U, AA, axes =([2, 3], [0,2]))  # sps, sps, D1,D2
+    blob = np.swapaxes(blob, 1, 2).reshape((sps*D1, sps*D2)) 
+    u,s,v = np.linalg.svd(blob, full_matrices=False)
+    k = s.shape[0]
+    A1_tilde = u.reshape((sps, D1, k))
+    A2_tilde = np.dot(np.diag(s), v).reshape((sps, k, D2))
+    psi.set_sites([i, i+1], [A1_tilde, A2_tilde])
+        
+    
     
 
 

@@ -9,12 +9,14 @@ Created on Mon Jun  4 19:38:54 2018
 import numpy as np
 from mps import MPS
 
-L=50
+L=8
 sps = 2
 D=5
 
 psi = MPS(L, sps=sps)
 psi.init_random(D)
 print(psi.norm())
-psi.left_normalize_full()
+psi.right_normalize_full()
 print(psi.norm())
+
+psi.gauge(4)
