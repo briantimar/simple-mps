@@ -46,7 +46,7 @@ class DynamicArray(object):
         for ii in range(self.L-1):
             A, Anext = self.get_site(ii), self.get_site(ii+1)
             if (A.shape[0] != self.sps) or (Anext.shape[0] !=self.sps):
-                raise ValueError("Local dimension is not constant")
+                raise ValueError("Local dimension is not constant: {0} {1}".format(A.shape, Anext.shape))
             if A.shape[2] != Anext.shape[1]:
                 raise ValueError("Bond dimensions at {0} do not agree".format(ii))
             
@@ -54,6 +54,8 @@ class DynamicArray(object):
         self._arrs[i] = A.copy()
                 
     def set_sites(self, indx_list, arrs):
+        if len(indx_list) != len(arrs):
+            raise ValueError("index and array list do not match")
         for i in range(len(indx_list)):
             self._set_site(indx_list[i], arrs[i])
         self._check_local_dimensions()
@@ -71,8 +73,8 @@ class DynamicArray(object):
         
     
     def __repr__(self):
-        if len(self._arrs)!=L or self.L >10:
-            return "DyanmicArray L={0} sps = {1}".format(self.L, self.sps)
+        if len(self._arrs)!=self.L or self.L >10:
+            return "Dyna micArray L={0} sps = {1}".format(self.L, self.sps)
         s= "DynamicArray: " 
         for i in range(self.L-1):
             s += "{0}-".format((self.get_bond_shape(i)))
@@ -117,6 +119,11 @@ class MPS(object):
             A_Adag = np.tensordot(A, np.conj(A), axes=([0], [0]))
             M= np.tensordot(M, A_Adag, axes=([2,3], [0,2]))
         return np.einsum('ijij', M)
+    
+    def get_local_weight_matrix(self, i):
+        """ returns the matrix sum_sigma A^dag A, A being the site matrix. If the state is left-normalized, this should be the identity."""
+        A = self.get_site(i)
+        return np.tensordot(A, np.conj(A), axes=([0, 1], [0, 1]))
             
     def _get_coeff(self, basis_state):
         """ entries of basis state = 0, ..., sps-1"""
@@ -158,9 +165,28 @@ class MPS(object):
         A_right_new = np.tensordot(self.get_site(i+1), np.dot(np.diag(s), v), axes = ([1], [1]))
         A_right_new= np.swapaxes(A_right_new, 1, 2)    
 
-        print(Anew.shape)
-        print(A_right_new.shape)
         self.set_sites([i, i+1], [Anew, A_right_new]) 
+        
+    def roll_right(self):
+        """ Roll all SV's into the last site"""
+        for i in range(self.L-1):
+            self.svd_push_right(i)
+            
+    def _normalize_right_end(self):
+        """Rescales the final (righmost) site matrices so that they satisfy a left-normalization condition"""
+        i=self.L-1
+        AAdag = self.get_local_weight_matrix(i)
+        nm = np.trace(AAdag)
+        A = self.get_site(i)
+        self.set_site(i, A / np.sqrt(nm) )
+        
+    def left_normalize_full(self):
+        """Rolls right (i.e. left-normalizes all but the last site matrix, then rescales that one so as to give the whole state norm 1."""
+        self.roll_right()
+        self._normalize_right_end()
+    
+    def get_bond_shape(self, i):
+        return self._dynamic_array.get_bond_shape(i)
     
     def __repr__(self):
         return "MPS. Internal array: \n" + self._dynamic_array.__repr__()
