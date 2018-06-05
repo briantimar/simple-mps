@@ -68,13 +68,13 @@ class DynamicArray(object):
         self._erase_arrs()
         self._arrs.append(np.random.rand(self.sps, 1,D))
         for _ in range(self.L-2):
-            self._arrs.append(np.random.rand(self.sps, D,D) / (2 * D) )
+            self._arrs.append(np.random.rand(self.sps, D,D) / (D * np.sqrt(self.sps)) )
         self._arrs.append(np.random.rand(self.sps, D,1))
         
     
     def __repr__(self):
         if len(self._arrs)!=self.L or self.L >10:
-            return "Dyna micArray L={0} sps = {1}".format(self.L, self.sps)
+            return "DynamicArray L={0} sps = {1}".format(self.L, self.sps)
         s= "DynamicArray: " 
         for i in range(self.L-1):
             s += "{0}-".format((self.get_bond_shape(i)))
@@ -191,4 +191,17 @@ class MPS(object):
     def __repr__(self):
         return "MPS. Internal array: \n" + self._dynamic_array.__repr__()
 
-            
+   
+
+
+def act_1local_gate(U, psi):
+    """Apply a single-qubit gate to MPS psi""" 
+    
+
+
+
+
+
+
+
+         
