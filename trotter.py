@@ -64,6 +64,40 @@ def get_exp_pauli_prod(t, opstr_list):
     return get_tensor_prod(exp_ops)
 
 
+def _act_1qubit_gate(U, psi, i):
+    """Apply a single-qubit gate to MPS psi at site i.
+       U = (sps) x (sps) array. For now assumed to be unitary.
+       psi = (pure ) MPS state.
+       
+       Updates the state in-place.
+       """
+       
+    A = psi.get_site(i)
+    psi.set_site(i, np.tensordot(U, A, axes=([1], [0])))
+    
+  
+    
+def _act_2qubit_local_gate(U, psi, i):
+    """ Apply two-qubit gate to sites i, i+1 of MPS psi.
+        U = 4-index gate, each axis of dimension sps.
+        psi = MPS
+        
+        Updates the state in-place.
+        Note that after applying the gate, left-normalization if any is generally not preserved."""
+    
+    A1, A2 = psi.get_site(i), psi.get_site(i+1)
+    sps = A1.shape[0]
+    D1, D2 = A1.shape[1], A2.shape[2]
+    AA= np.tensordot(A1, A2, axes=([2], [1])) ##sps, D1, sps, D2
+    blob = np.tensordot(U, AA, axes =([2, 3], [0,2]))  # sps, sps, D1,D2
+    blob = np.swapaxes(blob, 1, 2).reshape((sps*D1, sps*D2)) 
+    u,s,v = np.linalg.svd(blob, full_matrices=False)
+    k = s.shape[0]
+    A1_tilde = u.reshape((sps, D1, k))
+    A2_tilde = np.dot(np.diag(s), v).reshape((sps, k, D2))
+    psi.set_sites([i, i+1], [A1_tilde, A2_tilde])
+        
+    
 
 class LocalHamiltonian(object):
     """ A hamiltonian for a 1d system which is never fully stored in memory.

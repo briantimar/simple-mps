@@ -221,10 +221,15 @@ class MPS(object):
         for i in range(1,self.L):
             self.svd_push_left(self.L - i)
             
+    def _get_site_norm(self, i):
+        """ Returns contraction of all the indices associated with a particular physical site."""
+        A = self.get_site(i)
+        return np.tensordot(A, np.conj(A), axes = ([0, 1, 2], [0, 1, 2]))
+                
     def _normalize_site(self, i):
         """ rescales site matrix to have total trace 1 -- such that, if all other sites are appropriately left/right normalized, the state will have norm 1."""
         A = self.get_site(i)
-        nm = np.tensordot(A, np.conj(A), axes = ([0, 1, 2], [0, 1, 2]))
+        nm = self._get_site_norm(i)
         self.set_site(i,A / np.sqrt(nm))
         
     def _normalize_right_end(self):
@@ -243,6 +248,11 @@ class MPS(object):
     def right_normalize_full(self):
         self.roll_left()
         self._normalize_left_end()
+        
+    def normalize(self, i):
+        """Gauge MPS to site i and then normalize it."""
+        self.gauge(i)
+        self._normalize_site(i)
 
     def gauge(self, i):
         """Left-normalize all matrices to the left of site i, and right-normalize all those to the right.
@@ -250,7 +260,7 @@ class MPS(object):
         """
         for il in range(i):
             self.svd_push_right(il)
-        for ir in range(i+1, self.L):
+        for ir in range(self.L-1, i, -1):
             self.svd_push_left(ir)
     
     def get_bond_shape(self, i):
@@ -338,7 +348,8 @@ class MPO(object):
                 
         # the thing that remains has 6 bond indices. Those of the MPO are trivial.
         # those of the MPS will be traced out (this is the assumption of proper normalization)
-        return np.einsum('iijjkk', left_edge)
+        
+        return np.einsum('ijkkij', left_edge)
 
     def __repr__(self):
         r= "MPO on sites ({0}, {1})\n".format(self.ileft, self.iright)
@@ -386,44 +397,6 @@ def MPS_from_product_states(psi_list):
     mps.set_sites(indx_list, tensor_list)
     return mps
     
-
-
-def _act_1qubit_gate(U, psi, i):
-    """Apply a single-qubit gate to MPS psi at site i.
-       U = (sps) x (sps) array. For now assumed to be unitary.
-       psi = (pure ) MPS state.
-       
-       Updates the state in-place.
-       """
-       
-    A = psi.get_site(i)
-    psi.set_site(i, np.tensordot(U, A), axes=([1], [0]))
-    
-  
-    
-def _act_2qubit_local_gate(U, psi, i):
-    """ Apply two-qubit gate to sites i, i+1 of MPS psi.
-        U = 4-index gate, each axis of dimension sps.
-        psi = MPS
-        
-        Updates the state in-place.
-        Note that after applying the gate, left-normalization if any is generally not preserved."""
-    
-    A1, A2 = psi.get_site(i), psi.get_site(i+1)
-    sps = A1.shape[0]
-    D1, D2 = A1.shape[1], A2.shape[2]
-    AA= np.tensordot(A1, A2, axes=([2], [1])) ##sps, D1, sps, D2
-    blob = np.tensordot(U, AA, axes =([2, 3], [0,2]))  # sps, sps, D1,D2
-    blob = np.swapaxes(blob, 1, 2).reshape((sps*D1, sps*D2)) 
-    u,s,v = np.linalg.svd(blob, full_matrices=False)
-    k = s.shape[0]
-    A1_tilde = u.reshape((sps, D1, k))
-    A2_tilde = np.dot(np.diag(s), v).reshape((sps, k, D2))
-    psi.set_sites([i, i+1], [A1_tilde, A2_tilde])
-        
-    
-    
-
 
 
 
