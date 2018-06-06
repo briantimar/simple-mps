@@ -357,6 +357,10 @@ def _make_tensor_single_site(O):
         raise ValueError("Local op must be square array")
     return O.reshape((sps, 1, 1, sps))
 
+def _make_state_tensor_single_site(psi):
+    """ psi = sps-length pure state vector"""
+    return psi.reshape((psi.shape[0], 1, 1))
+
 def _make_dynamic_array_single_site(O):
     """ dynamic array containing only O"""
     t = _make_tensor_single_site(O)
@@ -371,6 +375,17 @@ def MPO_from_local_matrix(O, i):
     arr = _make_dynamic_array_single_site(O)
     mpo._initialize_interval(arr)
     return mpo
+
+
+def MPS_from_product_states(psi_list):
+    L = len(psi_list)
+    sps = len(psi_list[0])
+    mps = MPS(L, sps=sps)
+    indx_list = range(L)
+    tensor_list = [_make_state_tensor_single_site(psi) for psi in psi_list]
+    mps.set_sites(indx_list, tensor_list)
+    return mps
+    
 
 
 def _act_1qubit_gate(U, psi, i):
