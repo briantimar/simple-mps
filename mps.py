@@ -77,22 +77,23 @@ class DynamicArray(object):
     
     def _erase_arrs(self):
         self._arrs = [None]*self.L
+
     
-    def init_random(self, D):
+    def init_random(self, D, dtype=np.float32):
         """initialize random values with bond dimension D"""
         self._erase_arrs()
         
         if self.num_phys_indices==2:
-            self._arrs[0] = (np.random.rand(self.sps, 1,D, self.sps))
+            self._arrs[0] = (np.random.rand(self.sps, 1,D, self.sps).astype(dtype))
             for i in range(1,self.L-1):
-                self._arrs[i] = (np.random.rand(self.sps, D,D, self.sps) / (D * np.sqrt(self.sps)) )
-            self._arrs[self.L-1] = (np.random.rand(self.sps, D,1, self.sps))
+                self._arrs[i] = (np.random.rand(self.sps, D,D, self.sps).astype(dtype) / (D * np.sqrt(self.sps)) )
+            self._arrs[self.L-1] = (np.random.rand(self.sps, D,1, self.sps).astype(dtype))
             
         else:
-            self._arrs[0] = (np.random.rand(self.sps, 1,D))
+            self._arrs[0] = (np.random.rand(self.sps, 1,D).astype(dtype))
             for i in range(1,self.L-1):
-                self._arrs[i] = (np.random.rand(self.sps, D,D) / (D * np.sqrt(self.sps)) )
-            self._arrs[self.L-1] = (np.random.rand(self.sps, D,1))
+                self._arrs[i] = (np.random.rand(self.sps, D,D).astype(dtype) / (D * np.sqrt(self.sps)) )
+            self._arrs[self.L-1] = (np.random.rand(self.sps, D,1).astype(dtype))
             
     
     def __repr__(self):
@@ -110,19 +111,21 @@ class MPS(object):
     
     _bc_types = ['open']
     
-    def __init__(self, L,sps=2, bc='open'):
+    def __init__(self, L,sps=2, bc='open', Dmax=None):
         self.sps=sps
         self.L=L
         if bc not in MPS._bc_types:
             raise ValueError("Invalid boundary condition")
         self.bc=bc
-        
+        self.Dmax=Dmax
         self._dynamic_array = DynamicArray(self.sps, self.L)
             
-    def init_random(self,D):
-        """Randomized state with uniform bond dimension D"""
-        self._dynamic_array.init_random(D)
+    def init_random(self,dtype=np.float64):
+        """Randomized state with uniform bond dimension Dmax"""
+        self._dynamic_array.init_random(self.Dmax,dtype=dtype)
         
+    def set_Dmax(self, D):
+        self.Dmax=D
     def get_site(self, i):
         """returns array associated with a particular site"""
         return self._dynamic_array.get_site(i)    
@@ -133,11 +136,16 @@ class MPS(object):
     def set_sites(self, indx_list, Alist):
         self._dynamic_array.set_sites(indx_list, Alist)            
             
+    def print_shapes(self):
+        for i in range(self.L):
+            print(self.get_site(i).shape)
+    
     def norm(self):
         """ Returns <psi | psi> """
         edge_tensor = self.get_site(0)
         M = np.swapaxes( np.tensordot(edge_tensor, np.conj(edge_tensor), axes=([0], [0])), 1,2) # dimensions De, De, D, D
         for i in range(1, self.L):
+            
             A = self.get_site(i)
             A_Adag = np.tensordot(A, np.conj(A), axes=([0], [0]))
             M= np.tensordot(M, A_Adag, axes=([2,3], [0,2]))

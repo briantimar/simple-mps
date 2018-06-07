@@ -12,6 +12,7 @@ For sps=2 (spin-1/2) everything is written the the z-basis, all ops are in the P
 """
 
 import numpy as np
+from scipy.linalg import expm
 
 #for a particular local dimension, the recognized operators
 _LOC_OPS = {2:['X', 'Y', 'Z', 'N', 'I']}
@@ -39,12 +40,21 @@ def get_pauli_mat(opstr):
 
 def get_pauli_exp(t, opstr):
     """ returns matrix exponential 
-             exp(i t sigma)
-         where sigma is specified by opstr as one of the Paulis.
+             exp(-i t sigma)
+         where sigma is specified by opstr as a product of adjacent pauli's.
          
          Note the i.
          """
-    return np.cos(t) * np.identity(2) - 1j * np.sin(t) * get_pauli_mat(opstr)
+    L=len(opstr)
+    kron = get_pauli_kron(opstr)
+    U =  expm(-1j*t*kron)
+    return U
+
+def get_kron_prod(ops):
+    op = ops[0]
+    for i in range(1, len(ops)):
+        op = np.kron(op, ops[i])
+    return op
 
 def get_tensor_prod(ops):
     op = ops[0]
@@ -52,17 +62,16 @@ def get_tensor_prod(ops):
         op = np.tensordot(op, ops[i],axes=0)
     return op
 
+
+
 def get_pauli_prod(opstr_list):
     """ Returns tensor product of Paulis of the type and order specified by opstr_list (e.g. ['X', 'X', 'Z']) returns X tensor X tensor Z.
          Note that they are 'adjacent' in the tensor product."""
     ops = [get_pauli_mat(o) for o in opstr_list]
     return get_tensor_prod(ops)
 
-def get_exp_pauli_prod(t, opstr_list):
-
-    """ Returns exp(i t Sigma1...SigmaN), where Sigmai are the Pauli ops specified in opstr_list"""
-    exp_ops = [get_pauli_exp(t, o) for o in opstr_list]
-    return get_tensor_prod(exp_ops)
+def get_pauli_kron(opstr_list):
+    return get_kron_prod([get_pauli_mat(o) for o in opstr_list])
 
 
 def _act_1qubit_gate(U, psi, i):
@@ -74,30 +83,38 @@ def _act_1qubit_gate(U, psi, i):
        """
        
     A = psi.get_site(i)
-    psi.set_site(i, np.tensordot(U, A, axes=([1], [0])))
+    psi.set_site(i,np.tensordot(U, A, axes=([1], [0])))
     
   
     
-def _act_2qubit_local_gate(U, psi, i):
+def _act_2qubit_local_gate(U, psi, i, Dmax=None):
     """ Apply two-qubit gate to sites i, i+1 of MPS psi.
-        U = 4-index gate, each axis of dimension sps.
+        
+        where the first two indices are for the first qubit, the second two for the second, and so on.
         psi = MPS
         
         Updates the state in-place.
         Note that after applying the gate, left-normalization if any is generally not preserved."""
-    
+    print(U)
     A1, A2 = psi.get_site(i), psi.get_site(i+1)
     sps = A1.shape[0]
     D1, D2 = A1.shape[1], A2.shape[2]
     AA= np.tensordot(A1, A2, axes=([2], [1])) ##sps, D1, sps, D2
-    blob = np.tensordot(U, AA, axes =([2, 3], [0,2]))  # sps, sps, D1,D2
+    blob = np.tensordot(U, AA, axes =([1, 3], [0,2]))  # sps, sps, D1,D2
     blob = np.swapaxes(blob, 1, 2).reshape((sps*D1, sps*D2)) 
     u,s,v = np.linalg.svd(blob, full_matrices=False)
     k = s.shape[0]
+    trunc_error = None
+    if Dmax is not None:
+        k = min(s.shape[0], Dmax)
+        trunc_error = None if k==s.shape[0] else s[k]
+        u=u[:, :k]
+        s=s[:k]
+        v=v[:k,:]
     A1_tilde = u.reshape((sps, D1, k))
     A2_tilde = np.dot(np.diag(s), v).reshape((sps, k, D2))
     psi.set_sites([i, i+1], [A1_tilde, A2_tilde])
-        
+    return trunc_error    
     
     
 def _is_commuting(op1, op2):
@@ -166,7 +183,8 @@ def ExpTermIterator(static_list, exp_gen):
         
         yields: tuples (U, sites) of unitaries and the corresponding sites they act on.
              """
-    
+    static_list = static_list.copy()
+    np.random.shuffle(static_list)
     for opstr, couplings in static_list:
         for c in couplings:
             J, sites = c[0], c[1:]
@@ -180,10 +198,8 @@ def get_pauli_exp_gen(t):
         J = a coupling strength
         
         Returns: exponential of the corresponding hamiltonian as np array
-        ASSUMES THE TWO OPERATORS COMMUTE -- exponentiates each and then takes the tensor product"""
-        opstr_list = [a for a in opstr]
-        
-        return get_exp_pauli_prod(t*J, opstr_list)
+        """
+        return get_pauli_exp(t*J, opstr)
     return pauli_exp_gen
 
 
@@ -191,8 +207,8 @@ def get_pauli_exp_gen(t):
 class TrotterLayers(object):
     """ Stores trotter layers for a particular hamiltonian"""
     
-    def __init__(self, local_hamiltonian):
-        self.H = local_hamiltonian
+    def __init__(self, expH):
+        self.expH = expH
         self.evolve_time = None
         self.num_layers = None
         
@@ -202,29 +218,43 @@ class TrotterLayers(object):
         self.num_layers = n
     def _get_dt(self):
         return self.evolve_time / self.num_layers
+    @property
+    def layers(self):
+        return self.expH.layers(self._get_dt())
     
-    
-    
-    
-def run_trotter_evol(trot_layers, psi, T, nlayer=100, renormalize=False):
-    """ Run trotter evolution on state psi (updates in-place).
-        trot_layers: provides two (for now) noncommuting trotter layers.
-        psi = MPS pure state.
-        T = total evolution time.
-        If renormalize=True: renormalize the state after layer application. """
+    def apply(self, layer, psi):
+        """Layer: a generator of local unitaries.
+            psi: an MPS
+            
+            Applies each unitary in-place to psi.
+            """
+        for (U, sites) in layer:
+            if len(sites)==1:
+                
+                _act_1qubit_gate(U, psi, sites[0])
+            elif len(sites)==2 and sites[1]== (sites[0]+1):
+                trunc_err=_act_2qubit_local_gate(U, psi, sites[0], Dmax=psi.Dmax)
+                print("trunc error", trunc_err)
+            else:
+                raise NotImplementedError
         
-    trot_layers.set_evolve_time(T)
-    trot_layers.set_num_layers(nlayer)
-    for _ in range(nlayer):
-        for layer in trot_layers.layers:
-            layer.apply(psi)
-            if renormalize:
-                psi.left_normalize_full()
-                
-                
-                
-    
+    def run_evolution(self, psi, renormalize=False):
+        """ Run trotter evolution on state psi (updates in-place).
+            trot_layers: provides two (for now) noncommuting trotter layers.
+            psi = MPS pure state.
+            T = total evolution time.
+            If renormalize=True: renormalize the state after layer application. """
+            
+        for _ in range(self.num_layers):
+            for layer in self.layers:
+                self.apply(layer, psi)
+                if renormalize:
+                    psi.normalize(np.random.randint(0, psi.L))
+                    
+                    
+                    
         
+            
     
     
     

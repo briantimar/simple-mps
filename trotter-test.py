@@ -56,13 +56,38 @@ def test_imag_onesite():
         psi._normalize_site(i)
         print(sigma_x._expt_value_local(psi))
         
-    
- 
-L=4
-static = make_1d_TFI_static(4, 1, L)
+
+from trotter import TrotterLayers, sigmaz, identity
+
+L=10
+D=1
+sps=2
+J=0.0000
+psi = MPS(L,sps,Dmax=D)
+dtype=np.complex128
+psi.init_random(dtype=dtype)
+psi.left_normalize_full()
+Omega =10.0
+static = make_1d_TFI_static(J, Omega, L, bc='open')
+#static =[ ['X', [[-Omega, i] for i in range(L)]]]
+
+T=-30.0j/1.0
 expH = ExpPauliHamiltonian(static)
 expH.set_layer(['X'])
 expH.set_layer(['ZZ'])
+#expH.set_layer(['X'])
+tl = TrotterLayers(expH)
+tl.set_evolve_time(T)
+tl.set_num_layers(10)
+tl.run_evolution(psi, renormalize=True)
+###
+psi.left_normalize_full()
 
-    
+for i in range(L):
+    psi.gauge(i)
+    z = MPO_from_local_matrix(sigmaz(), i)
+    x = MPO_from_local_matrix(sigmax(), i)
+    I = MPO_from_local_matrix(identity(),i)
+    print(z._expt_value_local(psi), x._expt_value_local(psi), I._expt_value_local(psi))
+#    
     
