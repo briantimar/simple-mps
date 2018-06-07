@@ -65,7 +65,7 @@ def kron_to_tensor(U):
     """Convert kronecker product into tensordot ordering:
            (4,4) --> 2,2,2,2
            where the first 2 indices correspond to the first qubit, and the second two to the second."""
-    Utens = np.empty(U.shape)
+    Utens = np.empty(U.shape,dtype= U.dtype)
     Utens[0, : ] = U[:2,:2].reshape((4,))
     Utens[1, : ] = U[:2,2:].reshape((4,))
     Utens[2,: ] = U[2:, :2].reshape((4,))

@@ -60,20 +60,20 @@ def test_imag_onesite():
 
 from trotter import TrotterLayers, sigmaz, identity
 
-L=10
-D=5
+L=30
+D=7
 sps=2
-J=0.1000
+J=1.0000
 psi = MPS(L,sps,Dmax=D)
 dtype=np.complex128
 psi.init_random(dtype=dtype)
 psi.left_normalize_full()
-Omega =1.0
+Omega =0.1
 static = make_1d_TFI_static(J, Omega, L, bc='open')
 #static =[ ['X', [[-Omega, i] for i in range(L)]]]
 
 T=-20.0j/1.0
-nlayer=50
+nlayer=40
 expH = ExpPauliHamiltonian(static)
 expH.set_layer(['X'])
 expH.set_layer(['ZZ'])
