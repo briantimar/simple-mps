@@ -14,7 +14,8 @@ from mps import MPS_from_product_states
 from trotter import ExpPauliHamiltonian
 
 import sys
-sys.path.append("/home/brian/Documents/ryd-theory-code/ryd-theory/python_code/")
+#sys.path.append("/home/brian/Documents/ryd-theory-code/ryd-theory/python_code/")
+sys.path.append("/Users/btimar/Documents/ryd-theory-code/python_code/")
 from ryd_base import make_1d_TFI_static
 
 ###check product state construction
@@ -60,25 +61,26 @@ def test_imag_onesite():
 from trotter import TrotterLayers, sigmaz, identity
 
 L=10
-D=1
+D=5
 sps=2
-J=0.0000
+J=0.1000
 psi = MPS(L,sps,Dmax=D)
 dtype=np.complex128
 psi.init_random(dtype=dtype)
 psi.left_normalize_full()
-Omega =10.0
+Omega =1.0
 static = make_1d_TFI_static(J, Omega, L, bc='open')
 #static =[ ['X', [[-Omega, i] for i in range(L)]]]
 
-T=-30.0j/1.0
+T=-20.0j/1.0
+nlayer=50
 expH = ExpPauliHamiltonian(static)
 expH.set_layer(['X'])
 expH.set_layer(['ZZ'])
 #expH.set_layer(['X'])
 tl = TrotterLayers(expH)
 tl.set_evolve_time(T)
-tl.set_num_layers(10)
+tl.set_num_layers(nlayer)
 tl.run_evolution(psi, renormalize=True)
 ###
 psi.left_normalize_full()

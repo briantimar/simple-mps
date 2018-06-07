@@ -45,7 +45,6 @@ def get_pauli_exp(t, opstr):
          
          Note the i.
          """
-    L=len(opstr)
     kron = get_pauli_kron(opstr)
     U =  expm(-1j*t*kron)
     return U
@@ -62,7 +61,16 @@ def get_tensor_prod(ops):
         op = np.tensordot(op, ops[i],axes=0)
     return op
 
-
+def kron_to_tensor(U):
+    """Convert kronecker product into tensordot ordering:
+           (4,4) --> 2,2,2,2
+           where the first 2 indices correspond to the first qubit, and the second two to the second."""
+    Utens = np.empty(U.shape)
+    Utens[0, : ] = U[:2,:2].reshape((4,))
+    Utens[1, : ] = U[:2,2:].reshape((4,))
+    Utens[2,: ] = U[2:, :2].reshape((4,))
+    Utens[3,:] = U[2:,2:].reshape((4,))
+    return Utens.reshape((2,2,2,2))
 
 def get_pauli_prod(opstr_list):
     """ Returns tensor product of Paulis of the type and order specified by opstr_list (e.g. ['X', 'X', 'Z']) returns X tensor X tensor Z.
@@ -93,26 +101,39 @@ def _act_2qubit_local_gate(U, psi, i, Dmax=None):
         where the first two indices are for the first qubit, the second two for the second, and so on.
         psi = MPS
         
+        U = 2,2,2,2 tensor in tensordot convention, as returned by kron_to_tensor.
+        
+        The MPS is gauged to the relevant bond, U is applied, and then SVD is computed to define two new site matrices. If Dmax is provided, the bond dimension (number of schmidt values) is truncated to Dmax and the corresponding truncation error (sum of the dropped singular values) is returned.
+        
+        
+        To understand why the various swapaxes() and reshape()'s show up where they do -- note that the numpy convention is to read all array with 
+        the last axes being fastest; sometimes axes need to be swapped to ensure that one is read before the other, so that e.g. the spin indices really do correspond to different spin configurations and not some other array cut of dimension <sps>.
+        
+        
+        
         Updates the state in-place.
-        Note that after applying the gate, left-normalization if any is generally not preserved."""
-    print(U)
+       """
+    psi.gauge(i+1)
+    U=kron_to_tensor(U)
     A1, A2 = psi.get_site(i), psi.get_site(i+1)
     sps = A1.shape[0]
     D1, D2 = A1.shape[1], A2.shape[2]
-    AA= np.tensordot(A1, A2, axes=([2], [1])) ##sps, D1, sps, D2
-    blob = np.tensordot(U, AA, axes =([1, 3], [0,2]))  # sps, sps, D1,D2
+    AA= np.swapaxes(np.tensordot(A1, A2, axes=([2], [1])), 1,2) ##sps, sps,D1, D2
+    blob=np.tensordot(U, AA, axes=( [1,3], [0,1]))  
+                                        ###sps D1 sps D2
     blob = np.swapaxes(blob, 1, 2).reshape((sps*D1, sps*D2)) 
     u,s,v = np.linalg.svd(blob, full_matrices=False)
+
     k = s.shape[0]
-    trunc_error = None
+    trunc_error = 0
     if Dmax is not None:
         k = min(s.shape[0], Dmax)
-        trunc_error = None if k==s.shape[0] else s[k]
+        trunc_error = 0 if k==s.shape[0] else np.sum(s[k:])
         u=u[:, :k]
         s=s[:k]
         v=v[:k,:]
     A1_tilde = u.reshape((sps, D1, k))
-    A2_tilde = np.dot(np.diag(s), v).reshape((sps, k, D2))
+    A2_tilde = np.swapaxes(np.dot(np.diag(s), v).reshape((k,sps, D2)), 0, 1)
     psi.set_sites([i, i+1], [A1_tilde, A2_tilde])
     return trunc_error    
     
@@ -211,7 +232,7 @@ class TrotterLayers(object):
         self.expH = expH
         self.evolve_time = None
         self.num_layers = None
-        
+        self._trunc_errs=[]
     def set_evolve_time(self, T):
         self.evolve_time= T
     def set_num_layers(self, n):
@@ -234,7 +255,7 @@ class TrotterLayers(object):
                 _act_1qubit_gate(U, psi, sites[0])
             elif len(sites)==2 and sites[1]== (sites[0]+1):
                 trunc_err=_act_2qubit_local_gate(U, psi, sites[0], Dmax=psi.Dmax)
-                print("trunc error", trunc_err)
+                self._trunc_errs.append(trunc_err)
             else:
                 raise NotImplementedError
         
@@ -250,7 +271,8 @@ class TrotterLayers(object):
                 self.apply(layer, psi)
                 if renormalize:
                     psi.normalize(np.random.randint(0, psi.L))
-                    
+        if len(self._trunc_errs)>0:
+            print("Max trunc err", max(self._trunc_errs))
                     
                     
         
