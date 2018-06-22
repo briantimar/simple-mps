@@ -106,6 +106,10 @@ class DynamicArray(object):
         s+= "\n sps = {0}".format(self.sps)
         return s
         
+    def copy(self):
+        d =DynamicArray(self.sps, self.L, self.num_phys_indices)
+        d._arrs = [a.copy() for a in self._arrs]
+        return d
         
 class MPS(object):
     
@@ -277,6 +281,44 @@ class MPS(object):
     def __repr__(self):
         return "MPS. Internal array: \n" + self._dynamic_array.__repr__()
 
+    def get_schmidt_values(self, i):
+        """ Returns the singular values of the schmidt decomposition when cut at bond i"""
+        if i>= self.L-1:
+            raise ValueError
+        self.gauge(i+1)
+        A = self.get_site(i+1)
+        d, D1, D2 = A.shape
+        A= np.swapaxes(A, 0, 1)  # D1, d, D2
+        A = np.reshape(A, (D1 * d, D2))
+        u,s,v =np.linalg.svd(A, full_matrices=False)
+        return np.diag(s)
+    
+    def get_sent(self, i, trunc=1E-12):
+        """ get entanglement entropy when cut across bond i"""
+        s = self.get_schmidt_values(i)
+        s = s[s>trunc]
+        return - np.sum(s**2 * 2 * np.log(s))
+
+    def overlap(self, phi):
+        """ Returns the overlap <self| phi> between this and another mps phi.
+        """
+        M=None
+        if phi.L != self.L:
+            raise ValueError("states have different chain lengths")
+        for i in range(self.L):
+            A, B = self.get_site(i), phi.get_site(i)
+            newsite = np.tensordot(np.conj(A), B, axes=([0], [0]))
+            if M is None:
+                M= np.swapaxes(newsite, 1, 2)
+            else:
+                M= np.tensordot(M, newsite, axes=([2,3], [0,2]))
+        return M[0,0,0,0]
+
+    def copy(self):
+        newmps = MPS(self.L, sps=self.sps, bc=self.bc, Dmax=self.Dmax)
+        newmps._dynamic_array = self._dynamic_array.copy()
+        return newmps
+
 
 
 class MPO(object):
@@ -406,6 +448,47 @@ def MPS_from_product_states(psi_list):
     return mps
     
 
+def make_GHZ(L):
+    """ returns MPS for the following state: 10101... + 01010... (normalized)"""
+    if L%2 !=0:
+        raise NotImplementedError
+    #bulk matrices
+    D=2
+    A0 = np.array([[0, 1], [0, 0]])
+    A1 = np.array([[0, 0], [1, 0]])
+    
+    #edge matrices
+    A0L = (1.0/np.sqrt(2)) * np.array([[0,1]])
+    A0R =  np.array([[1,0]]).transpose()
+    A1L = (1.0/np.sqrt(2)) * np.array([[1, 0]])
+    A1R =  np.array([[0,1]]).transpose()
+    
+    Abulk = np.empty((2, D, D))
+    AL = np.empty((2, 1, D))
+    AR = np.empty((2, D, 1))
+    Abulk[0, :, :] = A0
+    Abulk[1, :, :] = A1
+    
+    AL[0, :, :] = A0L
+    AL[1, :, :] = A1L
+    AR[0, :, :] = A0R
+    AR[1, :, :] = A1R
+    
+    psi = MPS(L,sps=2,Dmax=None)
+    indxlist= list(range(L))
+    sitelist = [AL] + [Abulk.copy() for _ in range(L-2)] + [AR]
+    psi.set_sites(indxlist, sitelist)
+    return psi
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
 
 
 

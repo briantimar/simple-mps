@@ -233,10 +233,17 @@ class TrotterLayers(object):
         self.evolve_time = None
         self.num_layers = None
         self._trunc_errs=[]
+        self.max_trunc_err = None
+        self.max_allowed_trunc_err = None
+        self.Dmax = None
+    def set_max_trunc_err(self, e):
+        self.max_allowed_trunc_err = e
     def set_evolve_time(self, T):
         self.evolve_time= T
     def set_num_layers(self, n):
         self.num_layers = n
+    def set_Dmax(self, D):
+        self.Dmax = D
     def _get_dt(self):
         return self.evolve_time / self.num_layers
     @property
@@ -255,22 +262,32 @@ class TrotterLayers(object):
                 _act_1qubit_gate(U, psi, sites[0])
             elif len(sites)==2 and sites[1]== (sites[0]+1):
                 trunc_err=_act_2qubit_local_gate(U, psi, sites[0], Dmax=psi.Dmax)
+                if self.max_trunc_err is None or trunc_err > self.max_trunc_err:
+                    self.max_trunc_err=trunc_err
                 self._trunc_errs.append(trunc_err)
             else:
+                print(sites)
                 raise NotImplementedError
         
-    def run_evolution(self, psi, renormalize=False):
+    def run_evolution(self, psi, renormalize=True, adaptive=False):
         """ Run trotter evolution on state psi (updates in-place).
             trot_layers: provides two (for now) noncommuting trotter layers.
             psi = MPS pure state.
             T = total evolution time.
-            If renormalize=True: renormalize the state after layer application. """
+            If renormalize=True: renormalize the state after layer application. 
+            If adaptive=True: increases the max allowed bond dimension every time max trunc err is reached."""
             
         for _ in range(self.num_layers):
             for layer in self.layers:
                 self.apply(layer, psi)
                 if renormalize:
                     psi.normalize(np.random.randint(0, psi.L))
+                if self.max_trunc_err is not None:
+                    if adaptive == True and self.max_trunc_err > self.max_allowed_trunc_err and (self.Dmax is None or self.Dmax > psi.Dmax):
+                        print("err bound violated at", self.max_trunc_err)
+                        print("Increasing bond dimension to", psi.Dmax+1)
+                        psi.set_Dmax(psi.Dmax+1)
+                        self.max_trunc_err=0
         if len(self._trunc_errs)>0:
             print("Max trunc err", max(self._trunc_errs))
                     
