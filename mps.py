@@ -60,8 +60,8 @@ class DynamicArray(object):
         for jj in range(self.L):
             self._check_dims(jj)
 
-        for ii in range(self.L-1):
-            A, Anext = self.get_site(ii), self.get_site(ii+1)
+        for ii in range(self.L):
+            A, Anext = self.get_site(ii), self.get_site((ii+1)%self.L)
             if A.shape[2] != Anext.shape[1]:
                 raise ValueError("Bond dimensions at {0} do not agree".format(ii))
 
@@ -110,6 +110,11 @@ class DynamicArray(object):
         d =DynamicArray(self.sps, self.L, self.num_phys_indices)
         d._arrs = [a.copy() for a in self._arrs]
         return d
+    
+    def conj(self):
+        d =DynamicArray(self.sps, self.L, self.num_phys_indices)
+        d._arrs = [np.conj(a) for a in self._arrs]
+        return d
         
 class MPS(object):
     
@@ -144,8 +149,8 @@ class MPS(object):
         for i in range(self.L):
             print(self.get_site(i).shape)
     
-    def norm(self):
-        """ Returns <psi | psi> """
+    def _norm_slow(self):
+        """ Returns <psi | psi> via slow contractions, don't use """
         edge_tensor = self.get_site(0)
         M = np.swapaxes( np.tensordot(edge_tensor, np.conj(edge_tensor), axes=([0], [0])), 1,2) # dimensions De, De, D, D
         for i in range(1, self.L):
@@ -154,6 +159,11 @@ class MPS(object):
             A_Adag = np.tensordot(A, np.conj(A), axes=([0], [0]))
             M= np.tensordot(M, A_Adag, axes=([2,3], [0,2]))
         return np.einsum('ijij', M)
+    
+    def norm(self):
+        """ returns <psi| psi>"""
+        return self.overlap(self.conj())
+    
     
     def get_left_weight_matrix(self, i):
         """ returns the matrix sum_sigma A^dag A, A being the site matrix. If the state is left-normalized, this should be the identity."""
@@ -283,6 +293,8 @@ class MPS(object):
 
     def get_schmidt_values(self, i):
         """ Returns the singular values of the schmidt decomposition when cut at bond i"""
+        if self.bc != 'open':
+            raise NotImplementedError
         if i>= self.L-1:
             raise ValueError
         self.gauge(i+1)
@@ -299,9 +311,12 @@ class MPS(object):
         s = s[s>trunc]
         return - np.sum(s**2 * 2 * np.log(s))
 
-    def overlap(self, phi):
+    def _overlap_slow(self, phi):
         """ Returns the overlap <self| phi> between this and another mps phi.
+            Works for any boundary conditions.
+            Easy to understand as a diagram but inefficient. Don't use this one!
         """
+
         M=None
         if phi.L != self.L:
             raise ValueError("states have different chain lengths")
@@ -312,11 +327,43 @@ class MPS(object):
                 M= np.swapaxes(newsite, 1, 2)
             else:
                 M= np.tensordot(M, newsite, axes=([2,3], [0,2]))
-        return M[0,0,0,0]
+        return np.einsum('ijij', M)
+    
+    def overlap(self, phi):
+        """ Returns the overlap <self| phi> between this and another mps phi.
+            Works for any boundary conditions. """
+        
+        if phi.L != self.L or self.sps != phi.sps:
+            raise ValueError("states are incompatible")
+        M=None
+        for i in range(self.L):
+            Aconj, B = np.conj(self.get_site(i)), phi.get_site(i)
+            if M is None:
+                #initialize the edge matrix
+                M = np.swapaxes(np.tensordot(Aconj, B, axes=([0, 0])), 1, 2)   # active indices are 2 and 3
+            else:
+                site_summed = None
+                for j in range(self.sps):
+                     to_add = np.tensordot(np.tensordot( M, Aconj[j, :, :], axes=([2], [0])), B[j, :, :], axes=([2], [0]) )
+                     if site_summed is None:
+                         site_summed = to_add
+                     else:
+                         site_summed += to_add
+                M = site_summed
+        # finally contract the 'loop indices'
+        return np.einsum('ijij', M)
+                         
+        
 
     def copy(self):
         newmps = MPS(self.L, sps=self.sps, bc=self.bc, Dmax=self.Dmax)
         newmps._dynamic_array = self._dynamic_array.copy()
+        return newmps
+    
+    def conj(self):
+        """ returns the complex conjugate MPS"""
+        newmps = MPS(self.L, sps=self.sps, bc=self.bc, Dmax=self.Dmax)
+        newmps._dynamic_array = self._dynamic_array.conj()
         return newmps
 
 
@@ -474,7 +521,7 @@ def make_GHZ(L):
     AR[0, :, :] = A0R
     AR[1, :, :] = A1R
     
-    psi = MPS(L,sps=2,Dmax=None)
+    psi = MPS(L,sps=2,bc='open',Dmax=None)
     indxlist= list(range(L))
     sitelist = [AL] + [Abulk.copy() for _ in range(L-2)] + [AR]
     psi.set_sites(indxlist, sitelist)
